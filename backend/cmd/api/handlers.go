@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 )
 
@@ -27,4 +28,46 @@ func (app *application) AllMovies(w http.ResponseWriter, r *http.Request) {
 
 	_ = app.writeJSON(w, http.StatusOK, movies)
 
+}
+
+func (app *application) authenticate(w http.ResponseWriter, r *http.Request) {
+	// read json payload
+	var requestPayload struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	err := app.readJSON(w, r, &requestPayload)
+	if err != nil {
+		_ = app.errorJSON(w, err, http.StatusBadRequest)
+		return
+	}
+	// validate user against database
+	user, err := app.DB.GetUserByEmail(requestPayload.Email)
+	if err != nil {
+		app.errorJSON(w, errors.New("Invalid credentials"), http.StatusBadRequest)
+		return
+	}
+
+	// check password
+	valid, err := user.PasswordMatches(requestPayload.Password)
+	if err != nil || !valid {
+		app.errorJSON(w, errors.New("invalid credentials"), http.StatusBadRequest)
+		return
+	}
+	// // create jwt user
+	u := jwtUser{
+		ID:        user.ID,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+	}
+
+	// generate tokens
+	tokens, err := app.auth.GenerateTokenPair(&u)
+	if err != nil {
+		_ = app.errorJSON(w, err)
+		return
+	}
+	refreshCookie := app.auth.getRefreshCookie(tokens.RefreshToken)
+	http.SetCookie(w, refreshCookie)
+	app.writeJSON(w, http.StatusAccepted, tokens)
 }
